@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Beat Saber Web MVP</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="hud" id="hud">
+      <h1>Beat Saber Web</h1>
+      <p id="connectionStatus">Creando sala...</p>
+      <div class="session-row">
+        <div>
+          <p class="label">Codigo sala</p>
+          <p id="roomCode" class="value">------</p>
+        </div>
+        <div>
+          <p class="label">Puntaje</p>
+          <p id="score" class="value">0</p>
+        </div>
+      </div>
+      <img id="qrImage" alt="QR para conectar movil" />
+      <p id="phoneUrl" class="url"></p>
+      <p class="hint">Abre la URL o escanea el QR desde tu celular en la misma WiFi.</p>
+    </div>
+
+    <canvas id="scene"></canvas>
+
+    <script type="module">
+      import * as THREE from "https://unpkg.com/three@0.165.0/build/three.module.js";
+
+      const canvas = document.getElementById("scene");
+      const connectionStatus = document.getElementById("connectionStatus");
+      const roomCodeEl = document.getElementById("roomCode");
+      const qrImage = document.getElementById("qrImage");
+      const phoneUrlEl = document.getElementById("phoneUrl");
+      const scoreEl = document.getElementById("score");
+      const hud = document.getElementById("hud");
+
+      let socket;
+      let latestOrientation = { alpha: 0, beta: 0, gamma: 0 };
+      let swordSpeed = 0;
+      let score = 0;
+      let roomId = null;
+      let phoneConnected = false;
+      let lastOrientationTs = 0;
+
+      const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.setSize(window.innerWidth, window.innerHeight);
+
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x05070f);
+      scene.fog = new THREE.Fog(0x05070f, 20, 55);
+
+      const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 120);
+      camera.position.set(0, 1.4, 5);
+
+      const ambient = new THREE.AmbientLight(0x88aaff, 0.5);
+      scene.add(ambient);
+
+      const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
+      dirLight.position.set(2, 5, 6);
+      scene.add(dirLight);
+
+      const grid = new THREE.GridHelper(40, 40, 0x1c2f4f, 0x102035);
+      grid.position.y = -1.2;
+      scene.add(grid);
+
+      const tunnelGeo = new THREE.CylinderGeometry(8, 8, 70, 28, 1, true);
+      const tunnelMat = new THREE.MeshBasicMaterial({
+        color: 0x122038,
+        side: THREE.BackSide,
+        transparent: true,
+        opacity: 0.55,
+      });
+      const tunnel = new THREE.Mesh(tunnelGeo, tunnelMat);
+      tunnel.rotation.x = Math.PI / 2;
+      tunnel.position.z = -25;
+      scene.add(tunnel);
+
+      const swordGroup = new THREE.Group();
+      const handle = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.08, 0.08, 0.7, 14),
+        new THREE.MeshStandardMaterial({ color: 0x141414, metalness: 0.5, roughness: 0.3 })
+      );
+      handle.rotation.z = Math.PI / 2;
+      swordGroup.add(handle);
+
+      const blade = new THREE.Mesh(
+        new THREE.BoxGeometry(0.09, 1.7, 0.09),
+        new THREE.MeshStandardMaterial({
+          color: 0x16d2ff,
+          emissive: 0x0b6d8a,
+          emissiveIntensity: 1.1,
+          metalness: 0.1,
+          roughness: 0.2,
+        })
+      );
+      blade.position.x = 0.86;
+      swordGroup.add(blade);
+
+      swordGroup.position.set(0, 0.2, 0.5);
+      scene.add(swordGroup);
+
+      const swordBox = new THREE.Box3();
+      const tmpSwordQuat = new THREE.Quaternion();
+      const previousQuat = new THREE.Quaternion();
+      previousQuat.copy(swordGroup.quaternion);
+
+      const cubes = [];
+      const cubeBox = new THREE.Box3();
+      let spawnTimer = 0;
+
+      function spawnCube() {
+        const laneX = [-1.8, -0.9, 0, 0.9, 1.8];
+        const x = laneX[Math.floor(Math.random() * laneX.length)];
+        const y = -0.6 + Math.random() * 2.2;
+
+        const cube = new THREE.Mesh(
+          new THREE.BoxGeometry(0.72, 0.72, 0.72),
+          new THREE.MeshStandardMaterial({
+            color: 0xff3e6c,
+            emissive: 0x7b1d35,
+            emissiveIntensity: 0.6,
+            roughness: 0.3,
+            metalness: 0.1,
+          })
+        );
+
+        cube.position.set(x, y, -36);
+        scene.add(cube);
+        cubes.push(cube);
+      }
+
+      function removeCube(cube) {
+        const idx = cubes.indexOf(cube);
+        if (idx >= 0) cubes.splice(idx, 1);
+        scene.remove(cube);
+        cube.geometry.dispose();
+        cube.material.dispose();
+      }
+
+      function updateSwordFromPhone(dt) {
+        const alpha = THREE.MathUtils.degToRad(latestOrientation.alpha || 0);
+        const beta = THREE.MathUtils.degToRad(latestOrientation.beta || 0);
+        const gamma = THREE.MathUtils.degToRad(latestOrientation.gamma || 0);
+
+        const euler = new THREE.Euler(beta, alpha, -gamma, "YXZ");
+        tmpSwordQuat.setFromEuler(euler);
+        swordGroup.quaternion.slerp(tmpSwordQuat, 0.2);
+
+        const angleDelta = previousQuat.angleTo(swordGroup.quaternion);
+        swordSpeed = angleDelta / Math.max(dt, 0.0001);
+        previousQuat.copy(swordGroup.quaternion);
+      }
+
+      function updateGame(dt) {
+        spawnTimer += dt;
+        if (spawnTimer > 0.72) {
+          spawnTimer = 0;
+          spawnCube();
+        }
+
+        swordBox.setFromObject(swordGroup);
+
+        for (let i = cubes.length - 1; i >= 0; i -= 1) {
+          const cube = cubes[i];
+          cube.position.z += dt * 11;
+          cube.rotation.x += dt * 0.8;
+          cube.rotation.y += dt * 1.25;
+
+          cubeBox.setFromObject(cube);
+          const collides = swordBox.intersectsBox(cubeBox);
+
+          // Requiere un movimiento minimo para evitar sumar puntos con la espada quieta.
+          if (collides && swordSpeed > 1.7) {
+            score += 1;
+            scoreEl.textContent = String(score);
+            removeCube(cube);
+            continue;
+          }
+
+          if (cube.position.z > 7) {
+            removeCube(cube);
+          }
+        }
+      }
+
+      async function setupSession() {
+        const response = await fetch("/api/create-session");
+        const data = await response.json();
+
+        roomId = data.roomId;
+        roomCodeEl.textContent = roomId;
+        qrImage.src = data.qrDataUrl;
+        phoneUrlEl.textContent = data.phoneUrl;
+
+        const wsProtocol = location.protocol === "https:" ? "wss" : "ws";
+        socket = new WebSocket(`${wsProtocol}://${location.host}`);
+
+        socket.addEventListener("open", () => {
+          socket.send(JSON.stringify({ type: "join", role: "pc", roomId }));
+        });
+
+        socket.addEventListener("message", (event) => {
+          const msg = JSON.parse(event.data);
+
+          if (msg.type === "orientation") {
+            latestOrientation = {
+              alpha: msg.alpha,
+              beta: msg.beta,
+              gamma: msg.gamma,
+            };
+            lastOrientationTs = performance.now();
+          }
+
+          if (msg.type === "room-status") {
+            phoneConnected = Boolean(msg.phoneConnected);
+            hud.classList.toggle("compact", phoneConnected);
+
+            if (phoneConnected) {
+              connectionStatus.textContent = "Celular conectado. Corta cubos.";
+            } else {
+              connectionStatus.textContent = "Esperando conexion del celular...";
+            }
+          }
+
+          if (msg.type === "error") {
+            connectionStatus.textContent = `Error: ${msg.message}`;
+          }
+        });
+
+        socket.addEventListener("close", () => {
+          connectionStatus.textContent = "Conexion cerrada. Recarga para crear una nueva sala.";
+        });
+      }
+
+      let lastTime = performance.now();
+      function animate(now) {
+        const dt = Math.min((now - lastTime) / 1000, 0.05);
+        lastTime = now;
+
+        if (phoneConnected && now - lastOrientationTs > 1700) {
+          connectionStatus.textContent = "Celular conectado, sin datos de giro. Activa giroscopio o modo tactil.";
+        }
+
+        updateSwordFromPhone(dt);
+        updateGame(dt);
+
+        renderer.render(scene, camera);
+        requestAnimationFrame(animate);
+      }
+
+      window.addEventListener("resize", () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      });
+
+      setupSession().catch((err) => {
+        connectionStatus.textContent = `No se pudo crear la sala: ${err.message}`;
+      });
+
+      requestAnimationFrame(animate);
+    </script>
+  </body>
+</html>
