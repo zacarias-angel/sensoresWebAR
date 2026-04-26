@@ -13,8 +13,10 @@
       <p id="roomText">Sala: ----</p>
       <p id="state">Listo para conectar...</p>
       <button id="startBtn">Activar giroscopio</button>
+      <button id="toggleControlBtn" class="secondary">Apagar mando</button>
       <button id="touchBtn" class="secondary">Usar modo tactil</button>
       <button id="calibrateBtn" class="secondary">Calibrar centro</button>
+      <button id="copyDebugBtn" class="secondary">Copiar debug</button>
       <div class="sensor-grid">
         <p><span>alpha</span><strong id="alpha">0</strong></p>
         <p><span>beta</span><strong id="beta">0</strong></p>
@@ -46,8 +48,10 @@
       const betaEl = document.getElementById("beta");
       const gammaEl = document.getElementById("gamma");
       const startBtn = document.getElementById("startBtn");
+      const toggleControlBtn = document.getElementById("toggleControlBtn");
       const touchBtn = document.getElementById("touchBtn");
       const calibrateBtn = document.getElementById("calibrateBtn");
+      const copyDebugBtn = document.getElementById("copyDebugBtn");
       const sensorMeta = document.getElementById("sensorMeta");
       const touchPad = document.getElementById("touchPad");
       const touchKnob = document.getElementById("touchKnob");
@@ -71,9 +75,13 @@
       let touchModeAuto = false;
       let touchYaw = 0;
       let sensorsActive = false;
+      let controlEnabled = true;
+      let listenersAttached = false;
       let sentPackets = 0;
       let oriCount = 0;
       let motionCount = 0;
+      let lastSendTs = 0;
+      const SEND_INTERVAL_MS = 33;
 
       const orientation = { alpha: 0, beta: 0, gamma: 0 };
       let orientationOffset = null;
@@ -91,6 +99,59 @@
           .join(" ")}`;
         debugLog.textContent += `${line}\n`;
         debugLog.scrollTop = debugLog.scrollHeight;
+      }
+
+      function setControlEnabled(enabled, reason = "manual") {
+        controlEnabled = enabled;
+        setDbg(dbgMode, enabled ? "sensor" : "off");
+        toggleControlBtn.textContent = enabled ? "Apagar mando" : "Encender mando";
+
+        if (enabled) {
+          stateEl.textContent = "Mando activado.";
+          if (sensorsActive) {
+            attachSensorListeners();
+          }
+        } else {
+          stateEl.textContent = "Mando apagado.";
+          detachSensorListeners();
+        }
+
+        dbg("control", enabled ? "on" : "off", "reason", reason);
+      }
+
+      function attachSensorListeners() {
+        if (listenersAttached) return;
+        listenersAttached = true;
+        window.addEventListener("deviceorientationabsolute", onOrientation, true);
+        window.addEventListener("deviceorientation", onOrientation, true);
+        window.addEventListener("devicemotion", onMotion, true);
+        window.addEventListener("deviceorientation8w", onOrientation8w, true);
+        window.addEventListener("devicemotion8w", onMotion8w, true);
+        dbg("listeners sensores: attach");
+      }
+
+      function detachSensorListeners() {
+        if (!listenersAttached) return;
+        listenersAttached = false;
+        window.removeEventListener("deviceorientationabsolute", onOrientation, true);
+        window.removeEventListener("deviceorientation", onOrientation, true);
+        window.removeEventListener("devicemotion", onMotion, true);
+        window.removeEventListener("deviceorientation8w", onOrientation8w, true);
+        window.removeEventListener("devicemotion8w", onMotion8w, true);
+        dbg("listeners sensores: detach");
+      }
+
+      function getDebugText() {
+        return [
+          `secure=${dbgSecure.textContent}`,
+          `ws=${dbgWs.textContent}`,
+          `ori=${dbgOriCount.textContent}`,
+          `motion=${dbgMotionCount.textContent}`,
+          `sent=${dbgSent.textContent}`,
+          `mode=${dbgMode.textContent}`,
+          "--- logs ---",
+          debugLog.textContent,
+        ].join("\n");
       }
 
       const originalConsole = {
@@ -176,6 +237,12 @@
         betaEl.textContent = beta.toFixed(1);
         gammaEl.textContent = gamma.toFixed(1);
 
+        if (!controlEnabled) return;
+
+        const now = performance.now();
+        if (now - lastSendTs < SEND_INTERVAL_MS) return;
+        lastSendTs = now;
+
         if (!connected || socket.readyState !== WebSocket.OPEN) return;
 
         socket.send(
@@ -224,6 +291,7 @@
       }
 
       function onOrientation(event) {
+        if (!controlEnabled) return;
         const hasA = Number.isFinite(event.alpha);
         const hasB = Number.isFinite(event.beta);
         const hasG = Number.isFinite(event.gamma);
@@ -269,6 +337,7 @@
       }
 
       function onMotion(event) {
+        if (!controlEnabled) return;
         motionEventSeen = true;
         motionCount += 1;
         setDbg(dbgMotionCount, motionCount);
@@ -413,15 +482,12 @@
           }
 
           await requestMotionPermissionIfNeeded();
-          window.addEventListener("deviceorientationabsolute", onOrientation, true);
-          window.addEventListener("deviceorientation", onOrientation, true);
-          window.addEventListener("devicemotion", onMotion, true);
-          window.addEventListener("deviceorientation8w", onOrientation8w, true);
-          window.addEventListener("devicemotion8w", onMotion8w, true);
+          attachSensorListeners();
           dbg("listeners sensores registrados", {
             hasDeviceOrientationEvent: typeof DeviceOrientationEvent !== "undefined",
             hasDeviceMotionEvent: typeof DeviceMotionEvent !== "undefined",
             secureContext: window.isSecureContext,
+            sendIntervalMs: SEND_INTERVAL_MS,
           });
           sensorsActive = true;
           stateEl.textContent = "Sensores activos.";
@@ -447,6 +513,27 @@
         touchModeAuto = false;
         enableTouchMode();
       });
+
+      toggleControlBtn.addEventListener("click", () => {
+        setControlEnabled(!controlEnabled, "user-toggle");
+      });
+
+      copyDebugBtn.addEventListener("click", async () => {
+        const payload = getDebugText();
+        try {
+          await navigator.clipboard.writeText(payload);
+          stateEl.textContent = "Debug copiado al portapapeles.";
+          dbg("debug copiado");
+        } catch (_err) {
+          stateEl.textContent = "No se pudo copiar. Te lo dejo en consola.";
+          console.log(payload);
+        }
+      });
+
+      window.BeatSaberPhoneDebug = {
+        getText: getDebugText,
+        setControlEnabled,
+      };
 
       calibrateBtn.addEventListener("click", () => {
         calibrateCurrent();
