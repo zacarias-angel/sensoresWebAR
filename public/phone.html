@@ -1,575 +1,236 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="es">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Control Espada</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>Mando</title>
     <link rel="stylesheet" href="/styles.css" />
-    <script src="/xr-standalone/xr.js"></script>
   </head>
-  <body class="phone-body">
-    <div class="phone-card">
-      <h1>Control Espada</h1>
-      <p id="roomText">Sala: ----</p>
-      <p id="state">Listo para conectar...</p>
-      <button id="startBtn">Activar giroscopio</button>
-      <button id="toggleControlBtn" class="secondary">Apagar mando</button>
-      <button id="touchBtn" class="secondary">Usar modo tactil</button>
-      <button id="calibrateBtn" class="secondary">Calibrar centro</button>
-      <button id="copyDebugBtn" class="secondary">Copiar debug</button>
-      <div class="sensor-grid">
-        <p><span>alpha</span><strong id="alpha">0</strong></p>
-        <p><span>beta</span><strong id="beta">0</strong></p>
-        <p><span>gamma</span><strong id="gamma">0</strong></p>
+  <body class="controller-body">
+
+    <!-- â”€â”€ Rotate-phone overlay â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
+    <div class="rotate-overlay" id="rotateOverlay">
+      <div class="rotate-msg">
+        <p class="rotate-icon">â†»</p>
+        <p>Gira el telÃ©fono</p>
+        <p class="rotate-sub">Usa el telÃ©fono en horizontal</p>
       </div>
-      <p id="sensorMeta" class="hint">Fuente sensores: ---</p>
-      <div id="touchPad" class="touch-pad hidden">
-        <div id="touchKnob" class="touch-knob"></div>
-      </div>
-      <details class="debug-card" open>
-        <summary>Debug sensores</summary>
-        <div class="debug-grid">
-          <p><span>secure</span><strong id="dbgSecure">-</strong></p>
-          <p><span>ws</span><strong id="dbgWs">-</strong></p>
-          <p><span>ori events</span><strong id="dbgOriCount">0</strong></p>
-          <p><span>motion events</span><strong id="dbgMotionCount">0</strong></p>
-          <p><span>packets enviados</span><strong id="dbgSent">0</strong></p>
-          <p><span>modo activo</span><strong id="dbgMode">-</strong></p>
-        </div>
-        <pre id="debugLog" class="debug-log"></pre>
-      </details>
-      <p class="hint">Mantener esta pantalla abierta para controlar la espada.</p>
     </div>
 
-    <script>
-      const stateEl = document.getElementById("state");
-      const roomText = document.getElementById("roomText");
-      const alphaEl = document.getElementById("alpha");
-      const betaEl = document.getElementById("beta");
-      const gammaEl = document.getElementById("gamma");
-      const startBtn = document.getElementById("startBtn");
-      const toggleControlBtn = document.getElementById("toggleControlBtn");
-      const touchBtn = document.getElementById("touchBtn");
-      const calibrateBtn = document.getElementById("calibrateBtn");
-      const copyDebugBtn = document.getElementById("copyDebugBtn");
-      const sensorMeta = document.getElementById("sensorMeta");
-      const touchPad = document.getElementById("touchPad");
-      const touchKnob = document.getElementById("touchKnob");
-      const debugLog = document.getElementById("debugLog");
-      const dbgSecure = document.getElementById("dbgSecure");
-      const dbgWs = document.getElementById("dbgWs");
-      const dbgOriCount = document.getElementById("dbgOriCount");
-      const dbgMotionCount = document.getElementById("dbgMotionCount");
-      const dbgSent = document.getElementById("dbgSent");
-      const dbgMode = document.getElementById("dbgMode");
+    <!-- â”€â”€ Controller layout â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
+    <div class="controller" id="controller">
 
+      <!-- Player colour strip (top) -->
+      <div class="color-bar" id="colorBar"></div>
+
+      <!-- Connection status (fades after join) -->
+      <div class="ctrl-status" id="ctrlStatus">Conectandoâ€¦</div>
+
+      <!-- Left half: virtual joystick -->
+      <div class="ctrl-left">
+        <div class="joystick-zone" id="joystickZone">
+          <div class="joystick-base">
+            <div class="joystick-knob" id="joystickKnob"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right half: action buttons -->
+      <div class="ctrl-right">
+        <button class="ctrl-btn btn-a" id="btnA"><span class="btn-label">A</span></button>
+        <button class="ctrl-btn btn-b" id="btnB"><span class="btn-label">B</span></button>
+        <button class="ctrl-btn btn-c" id="btnC"><span class="btn-label">C</span></button>
+        <button class="ctrl-btn btn-d" id="btnD"><span class="btn-label">D</span></button>
+      </div>
+
+    </div><!-- /controller -->
+
+    <script>
+      // â”€â”€ Room from URL â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       const params = new URLSearchParams(window.location.search);
       const roomId = (params.get("room") || "").toUpperCase();
-      roomText.textContent = `Sala: ${roomId || "NO VALIDA"}`;
 
-      const wsProtocol = location.protocol === "https:" ? "wss" : "ws";
-      const socket = new WebSocket(`${wsProtocol}://${location.host}`);
-      let connected = false;
-      let sensorUpdates = 0;
-      let touchMode = false;
-      let touchModeAuto = false;
-      let touchYaw = 0;
-      let sensorsActive = false;
-      let controlEnabled = true;
-      let listenersAttached = false;
-      let sentPackets = 0;
-      let oriCount = 0;
-      let motionCount = 0;
-      let lastSendTs = 0;
-      const SEND_INTERVAL_MS = 33;
+      // â”€â”€ DOM refs â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      const rotateOverlay = document.getElementById("rotateOverlay");
+      const ctrlStatus    = document.getElementById("ctrlStatus");
+      const colorBar      = document.getElementById("colorBar");
+      const joystickZone  = document.getElementById("joystickZone");
+      const joystickKnob  = document.getElementById("joystickKnob");
+      const btnAEl        = document.getElementById("btnA");
+      const btnBEl        = document.getElementById("btnB");
+      const btnCEl        = document.getElementById("btnC");
+      const btnDEl        = document.getElementById("btnD");
 
-      const orientation = { alpha: 0, beta: 0, gamma: 0 };
-      let orientationOffset = null;
-      let lastMotionTs = 0;
-      let orientationEventSeen = false;
-      let motionEventSeen = false;
+      // â”€â”€ Player colours (must match index.html) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      const PLAYER_COLORS = ["#ff4444", "#4499ff", "#44ff88", "#ffcc00"];
 
-      function setDbg(el, value) {
-        el.textContent = String(value);
+      // â”€â”€ Joystick state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      const JOYSTICK_RADIUS = 62; // px
+      let joystickOrigin = null;
+      const joystick = { dx: 0, dy: 0 };
+
+      // â”€â”€ Button state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      let btnA = false;
+      let btnB = false;
+      let btnC = false;
+      let btnD = false;
+
+      // â”€â”€ Connection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      let connected  = false;
+      let playerSlot = -1;
+      let sendCount = 0;
+      let lastInputSignature = "";
+
+      function dlog(...args) {
+        console.log("[PHONE]", ...args);
       }
 
-      function dbg(...parts) {
-        const line = `[${new Date().toLocaleTimeString()}] ${parts
-          .map((p) => (typeof p === "string" ? p : JSON.stringify(p)))
-          .join(" ")}`;
-        debugLog.textContent += `${line}\n`;
-        debugLog.scrollTop = debugLog.scrollHeight;
+      // â”€â”€ Orientation guard â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      function checkOrientation() {
+        const landscape = window.innerWidth > window.innerHeight;
+        rotateOverlay.classList.toggle("hidden", landscape);
       }
+      checkOrientation();
+      window.addEventListener("resize", checkOrientation);
+      screen.orientation?.addEventListener("change", checkOrientation);
 
-      function setControlEnabled(enabled, reason = "manual") {
-        controlEnabled = enabled;
-        setDbg(dbgMode, enabled ? "sensor" : "off");
-        toggleControlBtn.textContent = enabled ? "Apagar mando" : "Encender mando";
-
-        if (enabled) {
-          stateEl.textContent = "Mando activado.";
-          if (sensorsActive) {
-            attachSensorListeners();
-          }
-        } else {
-          stateEl.textContent = "Mando apagado.";
-          detachSensorListeners();
-        }
-
-        dbg("control", enabled ? "on" : "off", "reason", reason);
-      }
-
-      function attachSensorListeners() {
-        if (listenersAttached) return;
-        listenersAttached = true;
-        window.addEventListener("deviceorientationabsolute", onOrientation, true);
-        window.addEventListener("deviceorientation", onOrientation, true);
-        window.addEventListener("devicemotion", onMotion, true);
-        window.addEventListener("deviceorientation8w", onOrientation8w, true);
-        window.addEventListener("devicemotion8w", onMotion8w, true);
-        dbg("listeners sensores: attach");
-      }
-
-      function detachSensorListeners() {
-        if (!listenersAttached) return;
-        listenersAttached = false;
-        window.removeEventListener("deviceorientationabsolute", onOrientation, true);
-        window.removeEventListener("deviceorientation", onOrientation, true);
-        window.removeEventListener("devicemotion", onMotion, true);
-        window.removeEventListener("deviceorientation8w", onOrientation8w, true);
-        window.removeEventListener("devicemotion8w", onMotion8w, true);
-        dbg("listeners sensores: detach");
-      }
-
-      function getDebugText() {
-        return [
-          `secure=${dbgSecure.textContent}`,
-          `ws=${dbgWs.textContent}`,
-          `ori=${dbgOriCount.textContent}`,
-          `motion=${dbgMotionCount.textContent}`,
-          `sent=${dbgSent.textContent}`,
-          `mode=${dbgMode.textContent}`,
-          "--- logs ---",
-          debugLog.textContent,
-        ].join("\n");
-      }
-
-      const originalConsole = {
-        log: console.log.bind(console),
-        warn: console.warn.bind(console),
-        error: console.error.bind(console),
-      };
-
-      console.log = (...args) => {
-        originalConsole.log(...args);
-        dbg("LOG", ...args);
-      };
-      console.warn = (...args) => {
-        originalConsole.warn(...args);
-        dbg("WARN", ...args);
-      };
-      console.error = (...args) => {
-        originalConsole.error(...args);
-        dbg("ERROR", ...args);
-      };
-
-      window.addEventListener("error", (event) => {
-        dbg("window.error", event.message || "sin mensaje");
-      });
-
-      window.addEventListener("unhandledrejection", (event) => {
-        dbg("unhandledrejection", String(event.reason || "sin reason"));
-      });
-
-      setDbg(dbgSecure, `${window.isSecureContext ? "yes" : "no"} (${location.protocol})`);
-      dbg("UA", navigator.userAgent);
-      dbg("host", location.host, "room", roomId || "none");
+      // â”€â”€ WebSocket â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      const wsProto = location.protocol === "https:" ? "wss" : "ws";
+      const socket  = new WebSocket(`${wsProto}://${location.host}`);
+      dlog("boot", { roomId, host: location.host, proto: wsProto });
 
       socket.addEventListener("open", () => {
-        setDbg(dbgWs, "open");
-        dbg("ws open");
+        dlog("ws open", { readyState: socket.readyState });
         if (!roomId) {
-          stateEl.textContent = "Sala invalida en URL";
-          dbg("room invalida");
+          ctrlStatus.textContent = "URL invÃ¡lida â€” falta cÃ³digo de sala";
+          dlog("missing roomId in URL");
           return;
         }
         socket.send(JSON.stringify({ type: "join", role: "phone", roomId }));
-        dbg("join enviado", roomId);
+        dlog("join sent", { roomId });
+        ctrlStatus.textContent = "UniÃ©ndoseâ€¦";
       });
 
       socket.addEventListener("message", (event) => {
         const msg = JSON.parse(event.data);
+        dlog("ws message", msg.type, msg);
 
         if (msg.type === "joined") {
-          connected = true;
-          stateEl.textContent = "Conectado. Activa sensores para empezar.";
-          dbg("joined ok", msg);
-        }
-
-        if (msg.type === "room-status") {
-          if (msg.pcConnected) {
-            stateEl.textContent = "PC detectada. Mueve el movil como espada.";
-          } else {
-            stateEl.textContent = "Esperando pantalla PC en esta sala...";
-          }
+          connected  = true;
+          playerSlot = msg.playerSlot;
+          const color = PLAYER_COLORS[playerSlot] || "#ffffff";
+          colorBar.style.background = color;
+          colorBar.style.display = "block";
+          ctrlStatus.textContent = `Jugador ${playerSlot + 1}`;
+          ctrlStatus.style.color = color;
+          setTimeout(() => { ctrlStatus.style.opacity = "0"; }, 2200);
         }
 
         if (msg.type === "error") {
-          stateEl.textContent = `Error: ${msg.message}`;
-          dbg("ws error msg", msg.message);
+          ctrlStatus.textContent = msg.message;
+          ctrlStatus.style.opacity = "1";
         }
       });
 
       socket.addEventListener("close", () => {
         connected = false;
-        setDbg(dbgWs, "closed");
-        stateEl.textContent = "Conexion cerrada.";
-        dbg("ws close");
+        dlog("ws close", { readyState: socket.readyState });
+        ctrlStatus.textContent = "Desconectado â€” recarga la pÃ¡gina";
+        ctrlStatus.style.opacity = "1";
       });
 
-      socket.addEventListener("error", () => {
-        setDbg(dbgWs, "error");
-        dbg("ws transport error");
+      socket.addEventListener("error", (err) => {
+        dlog("ws error", err?.message || "transport error");
       });
 
-      function sendOrientation(alpha, beta, gamma) {
-        alphaEl.textContent = alpha.toFixed(1);
-        betaEl.textContent = beta.toFixed(1);
-        gammaEl.textContent = gamma.toFixed(1);
-
-        if (!controlEnabled) return;
-
-        const now = performance.now();
-        if (now - lastSendTs < SEND_INTERVAL_MS) return;
-        lastSendTs = now;
-
-        if (!connected || socket.readyState !== WebSocket.OPEN) return;
-
-        socket.send(
-          JSON.stringify({
-            type: "orientation",
-            alpha,
-            beta,
-            gamma,
-          })
-        );
-
-        sentPackets += 1;
-        setDbg(dbgSent, sentPackets);
+      // â”€â”€ Joystick touch handling â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      function resetKnob() {
+        joystickOrigin = null;
+        joystick.dx = 0;
+        joystick.dy = 0;
+        joystickKnob.style.transform = "translate(-50%, -50%)";
       }
 
-      function normalizeDegrees(value) {
-        return ((value % 360) + 360) % 360;
+      function updateJoystick(cx, cy) {
+        if (!joystickOrigin) return;
+        let dx = cx - joystickOrigin.x;
+        let dy = -(cy - joystickOrigin.y); // invert Y: up = positive
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist > JOYSTICK_RADIUS) {
+          dx = (dx / dist) * JOYSTICK_RADIUS;
+          dy = (dy / dist) * JOYSTICK_RADIUS;
+        }
+        joystick.dx = dx / JOYSTICK_RADIUS;
+        joystick.dy = dy / JOYSTICK_RADIUS;
+        joystickKnob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${-dy}px))`;
       }
 
-      function normalizeSignedDegrees(value) {
-        let out = ((value + 180) % 360 + 360) % 360 - 180;
-        if (out === -180) out = 180;
-        return out;
-      }
-
-      function getCalibratedOrientation() {
-        const offset = orientationOffset || { alpha: 0, beta: 0, gamma: 0 };
-        return {
-          alpha: normalizeDegrees(orientation.alpha - offset.alpha),
-          beta: normalizeSignedDegrees(orientation.beta - offset.beta),
-          gamma: normalizeSignedDegrees(orientation.gamma - offset.gamma),
-        };
-      }
-
-      function emitCurrentOrientation() {
-        const out = getCalibratedOrientation();
-        sendOrientation(out.alpha, out.beta, out.gamma);
-      }
-
-      function calibrateCurrent() {
-        orientationOffset = {
-          alpha: orientation.alpha,
-          beta: orientation.beta,
-          gamma: orientation.gamma,
-        };
-      }
-
-      function onOrientation(event) {
-        if (!controlEnabled) return;
-        const hasA = Number.isFinite(event.alpha);
-        const hasB = Number.isFinite(event.beta);
-        const hasG = Number.isFinite(event.gamma);
-        if (!hasA && !hasB && !hasG) return;
-
-        // iOS Safari puede reportar rumbo como webkitCompassHeading.
-        const alphaRaw = Number.isFinite(event.webkitCompassHeading)
-          ? 360 - event.webkitCompassHeading
-          : (event.alpha ?? orientation.alpha);
-
-        orientation.alpha = normalizeDegrees(alphaRaw);
-        orientation.beta = normalizeSignedDegrees(event.beta ?? orientation.beta);
-        orientation.gamma = normalizeSignedDegrees(event.gamma ?? orientation.gamma);
-
-        sensorUpdates += 1;
-        oriCount += 1;
-        setDbg(dbgOriCount, oriCount);
-        orientationEventSeen = true;
-        sensorMeta.textContent = "Fuente sensores: deviceorientation";
-        if (oriCount <= 3 || oriCount % 40 === 0) {
-          dbg("orientation", {
-            alpha: Number(orientation.alpha.toFixed(1)),
-            beta: Number(orientation.beta.toFixed(1)),
-            gamma: Number(orientation.gamma.toFixed(1)),
-            webkitCompassHeading: event.webkitCompassHeading ?? null,
-          });
-        }
-
-        if (touchMode && touchModeAuto) {
-          touchMode = false;
-          touchModeAuto = false;
-          touchPad.classList.add("hidden");
-          stateEl.textContent = "Sensores detectados. Volviendo a modo giroscopio.";
-        }
-
-        if (!orientationOffset) {
-          calibrateCurrent();
-        }
-
-        if (!touchMode) {
-          emitCurrentOrientation();
-        }
-      }
-
-      function onMotion(event) {
-        if (!controlEnabled) return;
-        motionEventSeen = true;
-        motionCount += 1;
-        setDbg(dbgMotionCount, motionCount);
-        const now = event.timeStamp || performance.now();
-        const dt = lastMotionTs ? Math.min((now - lastMotionTs) / 1000, 0.05) : 0.016;
-        lastMotionTs = now;
-
-        const rr = event.rotationRate;
-        if (!orientationEventSeen && rr) {
-          // Fallback: integra velocidad angular del giroscopio cuando no hay deviceorientation.
-          if (Number.isFinite(rr.alpha)) orientation.alpha = normalizeDegrees(orientation.alpha + rr.alpha * dt);
-          if (Number.isFinite(rr.beta)) orientation.beta = normalizeSignedDegrees(orientation.beta + rr.beta * dt);
-          if (Number.isFinite(rr.gamma)) orientation.gamma = normalizeSignedDegrees(orientation.gamma + rr.gamma * dt);
-          sensorMeta.textContent = "Fuente sensores: devicemotion rotationRate";
-        }
-
-        const g = event.accelerationIncludingGravity;
-        if (g && Number.isFinite(g.x) && Number.isFinite(g.y) && Number.isFinite(g.z)) {
-          const pitchAcc = (Math.atan2(-g.x, Math.sqrt(g.y * g.y + g.z * g.z)) * 180) / Math.PI;
-          const rollAcc = (Math.atan2(g.y, g.z) * 180) / Math.PI;
-
-          if (!orientationEventSeen) {
-            // Complementary filter simple usando acelerometro para estabilizar pitch/roll.
-            orientation.beta = normalizeSignedDegrees(orientation.beta * 0.92 + pitchAcc * 0.08);
-            orientation.gamma = normalizeSignedDegrees(orientation.gamma * 0.92 + rollAcc * 0.08);
-            sensorMeta.textContent = "Fuente sensores: devicemotion accel+gyro";
-          }
-        }
-
-        if (!orientationOffset && (orientationEventSeen || motionEventSeen)) {
-          calibrateCurrent();
-        }
-
-        if (!touchMode && sensorsActive) {
-          emitCurrentOrientation();
-        }
-
-        if (touchMode && touchModeAuto) {
-          touchMode = false;
-          touchModeAuto = false;
-          touchPad.classList.add("hidden");
-          stateEl.textContent = "Sensores detectados. Volviendo a modo giroscopio.";
-          setDbg(dbgMode, "sensor");
-        }
-
-        if (motionCount <= 3 || motionCount % 40 === 0) {
-          dbg("motion", {
-            rr: event.rotationRate
-              ? {
-                  alpha: event.rotationRate.alpha,
-                  beta: event.rotationRate.beta,
-                  gamma: event.rotationRate.gamma,
-                }
-              : null,
-            accelG: event.accelerationIncludingGravity
-              ? {
-                  x: event.accelerationIncludingGravity.x,
-                  y: event.accelerationIncludingGravity.y,
-                  z: event.accelerationIncludingGravity.z,
-                }
-              : null,
-          });
-        }
-      }
-
-      function onOrientation8w(event) {
-        onOrientation(event.detail || event);
-      }
-
-      function onMotion8w(event) {
-        onMotion(event.detail || event);
-      }
-
-      function enableTouchMode() {
-        if (touchMode) return;
-        touchMode = true;
-        touchPad.classList.remove("hidden");
-        stateEl.textContent = "Modo tactil activo.";
-        setDbg(dbgMode, touchModeAuto ? "touch-auto" : "touch-manual");
-        dbg("touch mode on", touchModeAuto ? "auto" : "manual");
-      }
-
-      function updateTouchFromPoint(clientX, clientY) {
-        const rect = touchPad.getBoundingClientRect();
-        const dx = clientX - (rect.left + rect.width / 2);
-        const dy = clientY - (rect.top + rect.height / 2);
-        const maxRadius = rect.width * 0.4;
-        const len = Math.hypot(dx, dy) || 1;
-        const scale = Math.min(1, maxRadius / len);
-        const px = dx * scale;
-        const py = dy * scale;
-
-        touchKnob.style.transform = `translate(${px}px, ${py}px)`;
-
-        const normX = px / maxRadius;
-        const normY = py / maxRadius;
-
-        const beta = -normY * 65;
-        const gamma = normX * 65;
-        touchYaw = (touchYaw + normX * 2.2 + 360) % 360;
-        sendOrientation(touchYaw, beta, gamma);
-      }
-
-      function resetTouch() {
-        touchKnob.style.transform = "translate(0px, 0px)";
-        sendOrientation(touchYaw, 0, 0);
-      }
-
-      async function requestMotionPermissionIfNeeded() {
-        dbg("requestMotionPermissionIfNeeded start");
-        if (
-          typeof DeviceMotionEvent !== "undefined" &&
-          typeof DeviceMotionEvent.requestPermission === "function"
-        ) {
-          const motionResponse = await DeviceMotionEvent.requestPermission();
-          dbg("DeviceMotion permission", motionResponse);
-          if (motionResponse !== "granted") {
-            throw new Error("Permiso denegado para movimiento");
-          }
-        }
-
-        if (
-          typeof DeviceOrientationEvent !== "undefined" &&
-          typeof DeviceOrientationEvent.requestPermission === "function"
-        ) {
-          const response = await DeviceOrientationEvent.requestPermission();
-          dbg("DeviceOrientation permission", response);
-          if (response !== "granted") {
-            throw new Error("Permiso denegado para sensores");
-          }
-        }
-
-        dbg("requestMotionPermissionIfNeeded done");
-      }
-
-      startBtn.addEventListener("click", async () => {
-        try {
-          if (!window.isSecureContext && location.hostname !== "localhost") {
-            stateEl.textContent = "Sensores bloqueados: abre la URL en HTTPS (no HTTP).";
-            sensorMeta.textContent = "Fuente sensores: contexto inseguro";
-            dbg("contexto inseguro detectado");
-          }
-
-          await requestMotionPermissionIfNeeded();
-          attachSensorListeners();
-          dbg("listeners sensores registrados", {
-            hasDeviceOrientationEvent: typeof DeviceOrientationEvent !== "undefined",
-            hasDeviceMotionEvent: typeof DeviceMotionEvent !== "undefined",
-            secureContext: window.isSecureContext,
-            sendIntervalMs: SEND_INTERVAL_MS,
-          });
-          sensorsActive = true;
-          stateEl.textContent = "Sensores activos.";
-          sensorMeta.textContent = "Fuente sensores: iniciando...";
-          startBtn.disabled = true;
-          setDbg(dbgMode, "sensor");
-
-          setTimeout(() => {
-            if (sensorUpdates === 0 && !touchMode) {
-              stateEl.textContent = "No llegaron datos del giroscopio. Usa modo tactil o revisa permisos del navegador.";
-              touchModeAuto = true;
-              enableTouchMode();
-              dbg("fallback a touch por falta de sensorUpdates");
-            }
-          }, 1800);
-        } catch (error) {
-          stateEl.textContent = error.message;
-          dbg("activar sensores error", String(error?.message || error));
-        }
-      });
-
-      touchBtn.addEventListener("click", () => {
-        touchModeAuto = false;
-        enableTouchMode();
-      });
-
-      toggleControlBtn.addEventListener("click", () => {
-        setControlEnabled(!controlEnabled, "user-toggle");
-      });
-
-      copyDebugBtn.addEventListener("click", async () => {
-        const payload = getDebugText();
-        try {
-          await navigator.clipboard.writeText(payload);
-          stateEl.textContent = "Debug copiado al portapapeles.";
-          dbg("debug copiado");
-        } catch (_err) {
-          stateEl.textContent = "No se pudo copiar. Te lo dejo en consola.";
-          console.log(payload);
-        }
-      });
-
-      window.BeatSaberPhoneDebug = {
-        getText: getDebugText,
-        setControlEnabled,
-      };
-
-      calibrateBtn.addEventListener("click", () => {
-        calibrateCurrent();
-        stateEl.textContent = "Centro recalibrado.";
-        dbg("calibrado", orientationOffset);
-      });
-
-      touchPad.addEventListener("touchstart", (event) => {
-        const touch = event.touches[0];
-        if (!touch) return;
-        updateTouchFromPoint(touch.clientX, touch.clientY);
-      });
-
-      touchPad.addEventListener("touchmove", (event) => {
-        event.preventDefault();
-        const touch = event.touches[0];
-        if (!touch) return;
-        updateTouchFromPoint(touch.clientX, touch.clientY);
+      joystickZone.addEventListener("touchstart", (e) => {
+        e.preventDefault();
+        const t = e.changedTouches[0];
+        joystickOrigin = { x: t.clientX, y: t.clientY };
+        updateJoystick(t.clientX, t.clientY);
       }, { passive: false });
 
-      touchPad.addEventListener("touchend", () => {
-        resetTouch();
-      });
+      joystickZone.addEventListener("touchmove", (e) => {
+        e.preventDefault();
+        updateJoystick(e.changedTouches[0].clientX, e.changedTouches[0].clientY);
+      }, { passive: false });
 
-      touchPad.addEventListener("pointerdown", (event) => {
-        updateTouchFromPoint(event.clientX, event.clientY);
-      });
+      joystickZone.addEventListener("touchend",    (e) => { e.preventDefault(); resetKnob(); }, { passive: false });
+      joystickZone.addEventListener("touchcancel", (e) => { e.preventDefault(); resetKnob(); }, { passive: false });
 
-      touchPad.addEventListener("pointermove", (event) => {
-        if ((event.buttons & 1) !== 1) return;
-        updateTouchFromPoint(event.clientX, event.clientY);
-      });
+      // â”€â”€ Button touch handling â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      function bindBtn(el, setter) {
+        const id = el.id;
+        const press = (e) => {
+          e.preventDefault();
+          setter(true);
+          el.classList.add("pressed");
+          dlog("press", id);
+        };
+        const release = (e) => {
+          e.preventDefault();
+          setter(false);
+          el.classList.remove("pressed");
+          dlog("release", id);
+        };
 
-      touchPad.addEventListener("pointerup", () => {
-        resetTouch();
-      });
+        el.addEventListener("touchstart", press, { passive: false });
+        el.addEventListener("touchend", release, { passive: false });
+        el.addEventListener("touchcancel", release, { passive: false });
+        el.addEventListener("mousedown", press);
+        el.addEventListener("mouseup", release);
+        el.addEventListener("mouseleave", release);
+      }
+      bindBtn(btnAEl, (v) => { btnA = v; });
+      bindBtn(btnBEl, (v) => { btnB = v; });
+      bindBtn(btnCEl, (v) => { btnC = v; });
+      bindBtn(btnDEl, (v) => { btnD = v; });
+
+      // â”€â”€ Input loop @ ~30 fps â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      setInterval(() => {
+        if (!connected || socket.readyState !== WebSocket.OPEN) return;
+        const payload = {
+          type: "input",
+          dx: joystick.dx,
+          dy: 0,
+          btnA,
+          btnB,
+          btnC,
+          btnD,
+        };
+        socket.send(JSON.stringify(payload));
+
+        sendCount += 1;
+        const signature = `${btnA}${btnB}${btnC}${btnD}`;
+        if (signature !== lastInputSignature) {
+          dlog("input state", payload);
+          lastInputSignature = signature;
+        } else if (sendCount % 30 === 0) {
+          dlog("input heartbeat", payload);
+        }
+      }, 33);
     </script>
   </body>
 </html>

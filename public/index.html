@@ -1,254 +1,275 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="es">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Beat Saber Web MVP</title>
+    <title>Scalextric Web</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
     <div class="hud" id="hud">
-      <h1>Beat Saber Web</h1>
-      <p id="connectionStatus">Creando sala...</p>
-      <div class="session-row">
-        <div>
-          <p class="label">Codigo sala</p>
-          <p id="roomCode" class="value">------</p>
+      <div class="hud-top">
+        <div class="hud-room">
+          <p class="label">Sala</p>
+          <p id="roomCode" class="value accent">------</p>
         </div>
-        <div>
-          <p class="label">Puntaje</p>
-          <p id="score" class="value">0</p>
-        </div>
+        <img id="qrImage" class="qr-img" alt="QR para unirse" />
       </div>
-      <img id="qrImage" alt="QR para conectar movil" />
-      <p id="phoneUrl" class="url"></p>
-      <p class="hint">Abre la URL o escanea el QR desde tu celular en la misma WiFi.</p>
+      <p id="connectionStatus" class="hint">Creando sala...</p>
+      <div class="players-row">
+        <div class="player-pill" id="pill0"><span class="pdot" style="background:#ff4444"></span><span>J1</span></div>
+        <div class="player-pill" id="pill1"><span class="pdot" style="background:#4499ff"></span><span>J2</span></div>
+        <div class="player-pill" id="pill2"><span class="pdot" style="background:#44ff88"></span><span>J3</span></div>
+        <div class="player-pill" id="pill3"><span class="pdot" style="background:#ffcc00"></span><span>J4</span></div>
+      </div>
     </div>
+    <button id="hudToggleBtn" class="hud-toggle-btn" type="button">Ocultar panel</button>
 
     <canvas id="scene"></canvas>
 
     <script type="module">
       import * as THREE from "https://unpkg.com/three@0.165.0/build/three.module.js";
 
-      const canvas = document.getElementById("scene");
+      // â”€â”€ Constants â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      const PLAYER_COLORS   = [0xff4444, 0x4499ff, 0x44ff88, 0xffcc00];
+      const PLAYER_EMISSIVE = [0x881111, 0x114488, 0x118833, 0x886600];
+      const ARENA           = 9;
+      const TURN_SPEED      = 2.6;   // rad / s
+      const MAX_SPEED       = 8;     // units / s
+      const BOOST_MULT      = 2.0;
+      const SPEED_LERP      = 0.18;
+      const BRAKE_FRICTION  = 0.80;
+
+      // â”€â”€ DOM â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      const canvas           = document.getElementById("scene");
       const connectionStatus = document.getElementById("connectionStatus");
-      const roomCodeEl = document.getElementById("roomCode");
-      const qrImage = document.getElementById("qrImage");
-      const phoneUrlEl = document.getElementById("phoneUrl");
-      const scoreEl = document.getElementById("score");
-      const hud = document.getElementById("hud");
+      const roomCodeEl       = document.getElementById("roomCode");
+      const qrImage          = document.getElementById("qrImage");
+      const hud              = document.getElementById("hud");
+      const hudToggleBtn     = document.getElementById("hudToggleBtn");
+      const inputStateByPlayer = ["", "", "", ""];
 
-      let socket;
-      let latestOrientation = { alpha: 0, beta: 0, gamma: 0 };
-      let swordSpeed = 0;
-      let score = 0;
-      let roomId = null;
-      let phoneConnected = false;
-      let lastOrientationTs = 0;
+      function dlog(...args) {
+        console.log("[PC]", ...args);
+      }
 
+      // â”€â”€ Renderer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
       renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.shadowMap.enabled = true;
 
+      // â”€â”€ Scene â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       const scene = new THREE.Scene();
-      scene.background = new THREE.Color(0x05070f);
-      scene.fog = new THREE.Fog(0x05070f, 20, 55);
+      scene.background = new THREE.Color(0x06101e);
+      scene.fog = new THREE.FogExp2(0x06101e, 0.032);
 
-      const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 120);
-      camera.position.set(0, 1.4, 5);
+      // â”€â”€ Camera â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      const camera = new THREE.PerspectiveCamera(52, window.innerWidth / window.innerHeight, 0.1, 150);
+      camera.position.set(0, 19, 15);
+      camera.lookAt(0, 0, 0);
 
-      const ambient = new THREE.AmbientLight(0x88aaff, 0.5);
-      scene.add(ambient);
+      // â”€â”€ Lights â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      scene.add(new THREE.AmbientLight(0x8899cc, 0.65));
+      const sun = new THREE.DirectionalLight(0xffffff, 1.4);
+      sun.position.set(6, 14, 10);
+      sun.castShadow = true;
+      sun.shadow.mapSize.set(1024, 1024);
+      scene.add(sun);
 
-      const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
-      dirLight.position.set(2, 5, 6);
-      scene.add(dirLight);
+      // â”€â”€ Floor â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      const floor = new THREE.Mesh(
+        new THREE.PlaneGeometry(ARENA * 2, ARENA * 2),
+        new THREE.MeshStandardMaterial({ color: 0x0d1e30, roughness: 0.88, metalness: 0.08 })
+      );
+      floor.rotation.x = -Math.PI / 2;
+      floor.receiveShadow = true;
+      scene.add(floor);
 
-      const grid = new THREE.GridHelper(40, 40, 0x1c2f4f, 0x102035);
-      grid.position.y = -1.2;
+      const grid = new THREE.GridHelper(ARENA * 2, 18, 0x19304a, 0x0c1e2e);
+      grid.position.y = 0.012;
       scene.add(grid);
 
-      const tunnelGeo = new THREE.CylinderGeometry(8, 8, 70, 28, 1, true);
-      const tunnelMat = new THREE.MeshBasicMaterial({
-        color: 0x122038,
-        side: THREE.BackSide,
-        transparent: true,
-        opacity: 0.55,
+     
+      const wallMat = new THREE.MeshStandardMaterial({ color: 0x1c3e5c, roughness: 0.55, metalness: 0.35 });
+      [
+        { x: 0,      z: -ARENA, lx: ARENA * 2, lz: 0.5 },
+        { x: 0,      z:  ARENA, lx: ARENA * 2, lz: 0.5 },
+        { x: -ARENA, z: 0,      lx: 0.5,       lz: ARENA * 2 },
+        { x:  ARENA, z: 0,      lx: 0.5,       lz: ARENA * 2 },
+      ].forEach(({ x, z, lx, lz }) => {
+        const wall = new THREE.Mesh(new THREE.BoxGeometry(lx, 0.9, lz), wallMat);
+        wall.position.set(x, 0.45, z);
+        wall.castShadow = true;
+        scene.add(wall);
       });
-      const tunnel = new THREE.Mesh(tunnelGeo, tunnelMat);
-      tunnel.rotation.x = Math.PI / 2;
-      tunnel.position.z = -25;
-      scene.add(tunnel);
 
-      const swordGroup = new THREE.Group();
-      const handle = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.08, 0.08, 0.7, 14),
-        new THREE.MeshStandardMaterial({ color: 0x141414, metalness: 0.5, roughness: 0.3 })
-      );
-      handle.rotation.z = Math.PI / 2;
-      swordGroup.add(handle);
+      const startPos = [
+        { x: -3, z: -3, angle: Math.PI * 0.75 },
+        { x:  3, z: -3, angle: -Math.PI * 0.75 },
+        { x: -3, z:  3, angle: Math.PI * 0.25 },
+        { x:  3, z:  3, angle: -Math.PI * 0.25 },
+      ];
 
-      const blade = new THREE.Mesh(
-        new THREE.BoxGeometry(0.09, 1.7, 0.09),
-        new THREE.MeshStandardMaterial({
-          color: 0x16d2ff,
-          emissive: 0x0b6d8a,
-          emissiveIntensity: 1.1,
-          metalness: 0.1,
-          roughness: 0.2,
-        })
-      );
-      blade.position.x = 0.86;
-      swordGroup.add(blade);
-
-      swordGroup.position.set(0, 0.2, 0.5);
-      scene.add(swordGroup);
-
-      const swordBox = new THREE.Box3();
-      const tmpSwordQuat = new THREE.Quaternion();
-      const previousQuat = new THREE.Quaternion();
-      previousQuat.copy(swordGroup.quaternion);
-
-      const cubes = [];
-      const cubeBox = new THREE.Box3();
-      let spawnTimer = 0;
-
-      function spawnCube() {
-        const laneX = [-1.8, -0.9, 0, 0.9, 1.8];
-        const x = laneX[Math.floor(Math.random() * laneX.length)];
-        const y = -0.6 + Math.random() * 2.2;
-
-        const cube = new THREE.Mesh(
-          new THREE.BoxGeometry(0.72, 0.72, 0.72),
+      function makeCar(ci) {
+        const g = new THREE.Group();
+        // Body
+        const body = new THREE.Mesh(
+          new THREE.BoxGeometry(0.65, 0.28, 1.1),
           new THREE.MeshStandardMaterial({
-            color: 0xff3e6c,
-            emissive: 0x7b1d35,
-            emissiveIntensity: 0.6,
-            roughness: 0.3,
-            metalness: 0.1,
+            color: PLAYER_COLORS[ci],
+            emissive: PLAYER_EMISSIVE[ci],
+            emissiveIntensity: 0.55,
+            roughness: 0.32,
+            metalness: 0.45,
           })
         );
-
-        cube.position.set(x, y, -36);
-        scene.add(cube);
-        cubes.push(cube);
+        body.castShadow = true;
+        g.add(body);
+        // Cockpit
+        const cockpit = new THREE.Mesh(
+          new THREE.BoxGeometry(0.37, 0.21, 0.44),
+          new THREE.MeshStandardMaterial({ color: 0x04101c, roughness: 0.5 })
+        );
+        cockpit.position.set(0, 0.24, -0.08);
+        g.add(cockpit);
+        g.visible = false;
+        return g;
       }
 
-      function removeCube(cube) {
-        const idx = cubes.indexOf(cube);
-        if (idx >= 0) cubes.splice(idx, 1);
-        scene.remove(cube);
-        cube.geometry.dispose();
-        cube.material.dispose();
+      const players = startPos.map((pos, i) => ({
+        x: pos.x, z: pos.z, angle: pos.angle,
+        speed: 0,
+        input: { dx: 0, dy: 0, btnA: false, btnB: false, btnC: false, btnD: false },
+        active: false,
+        mesh: makeCar(i),
+      }));
+
+      players.forEach((p) => {
+        p.mesh.position.set(p.x, 0.2, p.z);
+        p.mesh.rotation.y = p.angle;
+        scene.add(p.mesh);
+      });
+
+      
+      function updatePills(playerList) {
+        playerList.forEach(({ slot, connected }) => {
+          document.getElementById(`pill${slot}`)?.classList.toggle("active", connected);
+        });
       }
 
-      function updateSwordFromPhone(dt) {
-        const alpha = THREE.MathUtils.degToRad(latestOrientation.alpha || 0);
-        const beta = THREE.MathUtils.degToRad(latestOrientation.beta || 0);
-        const gamma = THREE.MathUtils.degToRad(latestOrientation.gamma || 0);
+      
+      let socket, roomId;
+      let hudVisible = true;
 
-        const euler = new THREE.Euler(beta, alpha, -gamma, "YXZ");
-        tmpSwordQuat.setFromEuler(euler);
-        swordGroup.quaternion.slerp(tmpSwordQuat, 0.2);
-
-        const angleDelta = previousQuat.angleTo(swordGroup.quaternion);
-        swordSpeed = angleDelta / Math.max(dt, 0.0001);
-        previousQuat.copy(swordGroup.quaternion);
-      }
-
-      function updateGame(dt) {
-        spawnTimer += dt;
-        if (spawnTimer > 0.72) {
-          spawnTimer = 0;
-          spawnCube();
-        }
-
-        swordBox.setFromObject(swordGroup);
-
-        for (let i = cubes.length - 1; i >= 0; i -= 1) {
-          const cube = cubes[i];
-          cube.position.z += dt * 11;
-          cube.rotation.x += dt * 0.8;
-          cube.rotation.y += dt * 1.25;
-
-          cubeBox.setFromObject(cube);
-          const collides = swordBox.intersectsBox(cubeBox);
-
-          // Requiere un movimiento minimo para evitar sumar puntos con la espada quieta.
-          if (collides && swordSpeed > 1.7) {
-            score += 1;
-            scoreEl.textContent = String(score);
-            removeCube(cube);
-            continue;
-          }
-
-          if (cube.position.z > 7) {
-            removeCube(cube);
-          }
-        }
-      }
+      hudToggleBtn.addEventListener("click", () => {
+        hudVisible = !hudVisible;
+        hud.classList.toggle("is-hidden", !hudVisible);
+        hudToggleBtn.textContent = hudVisible ? "Ocultar panel" : "Mostrar panel";
+      });
 
       async function setupSession() {
-        const response = await fetch("/api/create-session");
-        const data = await response.json();
-
+        const res  = await fetch("/api/create-session");
+        const data = await res.json();
         roomId = data.roomId;
         roomCodeEl.textContent = roomId;
         qrImage.src = data.qrDataUrl;
-        phoneUrlEl.textContent = data.phoneUrl;
+        dlog("session creada", { roomId, phoneUrl: data.phoneUrl });
 
-        const wsProtocol = location.protocol === "https:" ? "wss" : "ws";
-        socket = new WebSocket(`${wsProtocol}://${location.host}`);
+        const wsProto = location.protocol === "https:" ? "wss" : "ws";
+        socket = new WebSocket(`${wsProto}://${location.host}`);
 
         socket.addEventListener("open", () => {
+          dlog("ws open", { roomId });
           socket.send(JSON.stringify({ type: "join", role: "pc", roomId }));
+          dlog("join pc enviado", { roomId });
         });
 
         socket.addEventListener("message", (event) => {
           const msg = JSON.parse(event.data);
-
-          if (msg.type === "orientation") {
-            latestOrientation = {
-              alpha: msg.alpha,
-              beta: msg.beta,
-              gamma: msg.gamma,
-            };
-            lastOrientationTs = performance.now();
+          if (msg.type !== "input") {
+            dlog("ws message", msg.type, msg);
           }
 
           if (msg.type === "room-status") {
-            phoneConnected = Boolean(msg.phoneConnected);
-            hud.classList.toggle("compact", phoneConnected);
-
-            if (phoneConnected) {
-              connectionStatus.textContent = "Celular conectado. Corta cubos.";
-            } else {
-              connectionStatus.textContent = "Esperando conexion del celular...";
-            }
+            const count = msg.players.filter((p) => p.connected).length;
+            connectionStatus.textContent = count
+              ? `${count} jugador${count > 1 ? "es" : ""} conectado${count > 1 ? "s" : ""}. Escanea el QR para unirte.`
+              : "Esperando jugadores… Escanea el QR con el movil.";
+            msg.players.forEach(({ slot, connected }) => {
+              players[slot].active = connected;
+              players[slot].mesh.visible = connected;
+              if (!connected) players[slot].speed = 0;
+            });
+            updatePills(msg.players);
           }
 
-          if (msg.type === "error") {
-            connectionStatus.textContent = `Error: ${msg.message}`;
+          if (msg.type === "input") {
+            const p = players[msg.playerSlot];
+            if (p) {
+              const btnA = Boolean(msg.btnA ?? msg.btn1);
+              const btnB = Boolean(msg.btnB ?? msg.btn2);
+              p.input = {
+                dx: msg.dx,
+                dy: msg.dy,
+                btnA,
+                btnB,
+                btnC: msg.btnC,
+                btnD: msg.btnD,
+              };
+
+              const state = `dx:${Number(msg.dx || 0).toFixed(2)} A:${btnA} B:${btnB} C:${Boolean(msg.btnC)} D:${Boolean(msg.btnD)}`;
+              if (inputStateByPlayer[msg.playerSlot] !== state) {
+                inputStateByPlayer[msg.playerSlot] = state;
+                dlog(`input J${msg.playerSlot + 1}`, state);
+              }
+            }
           }
         });
 
         socket.addEventListener("close", () => {
-          connectionStatus.textContent = "Conexion cerrada. Recarga para crear una nueva sala.";
+          dlog("ws close", { roomId });
+          connectionStatus.textContent = "Conexion cerrada. Recarga la página.";
+        });
+
+        socket.addEventListener("error", (err) => {
+          dlog("ws error", err?.message || "transport error");
         });
       }
 
+      // â”€â”€ Physics â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      function updatePlayer(p, dt) {
+        if (!p.active) return;
+        const { dx, btnA, btnB, btnC, btnD } = p.input;
+
+        if (btnB) {
+          p.speed *= 0.55;
+          if (Math.abs(p.speed) < 0.15) p.speed = 0;
+        } else {
+          let target = 0;
+          if (btnA) target += MAX_SPEED;
+          if (btnC) target -= MAX_SPEED * 0.7;
+          if (btnD) target += MAX_SPEED * BOOST_MULT;
+          p.speed += (target - p.speed) * SPEED_LERP;
+        }
+
+        if (Math.abs(p.speed) > 0.05) {
+          p.angle += dx * TURN_SPEED * dt * (p.speed >= 0 ? 1 : -1);
+        }
+
+        p.x = Math.max(-(ARENA - 0.6), Math.min(ARENA - 0.6, p.x + Math.sin(p.angle) * p.speed * dt));
+        p.z = Math.max(-(ARENA - 0.6), Math.min(ARENA - 0.6, p.z + Math.cos(p.angle) * p.speed * dt));
+
+        p.mesh.position.set(p.x, 0.2, p.z);
+        p.mesh.rotation.y = p.angle;
+      }
+
+      // â”€â”€ Loop â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       let lastTime = performance.now();
       function animate(now) {
         const dt = Math.min((now - lastTime) / 1000, 0.05);
         lastTime = now;
-
-        if (phoneConnected && now - lastOrientationTs > 1700) {
-          connectionStatus.textContent = "Celular conectado, sin datos de giro. Activa giroscopio o modo tactil.";
-        }
-
-        updateSwordFromPhone(dt);
-        updateGame(dt);
-
+        players.forEach((p) => updatePlayer(p, dt));
         renderer.render(scene, camera);
         requestAnimationFrame(animate);
       }
@@ -260,9 +281,8 @@
       });
 
       setupSession().catch((err) => {
-        connectionStatus.textContent = `No se pudo crear la sala: ${err.message}`;
+        connectionStatus.textContent = `Error: ${err.message}`;
       });
-
       requestAnimationFrame(animate);
     </script>
   </body>

@@ -14,6 +14,8 @@ app.use("/xr-standalone", express.static(path.join(__dirname, "xr-standalone")))
 
 const rooms = new Map();
 
+// Each room holds one PC display and up to 4 phone controllers
+// phones is a fixed-length array of 4 slots; null = empty
 function generateRoomId() {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let result = "";
@@ -58,7 +60,7 @@ app.get("/api/create-session", async (req, res) => {
 
   rooms.set(roomId, {
     pc: null,
-    phone: null,
+    phones: [null, null, null, null],
     createdAt: Date.now(),
   });
 
@@ -79,39 +81,43 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
 function safeSend(ws, payload) {
-  if (!ws || ws.readyState !== ws.OPEN) {
-    return;
-  }
+  if (!ws || ws.readyState !== ws.OPEN) return;
   ws.send(JSON.stringify(payload));
+}
+
+function getRoomPlayers(room) {
+  return room.phones.map((ws, slot) => ({
+    slot,
+    connected: ws !== null && ws.readyState === 1, // OPEN
+  }));
 }
 
 function notifyRoom(roomId) {
   const room = rooms.get(roomId);
   if (!room) return;
 
-  const statusPayload = {
+  const payload = {
     type: "room-status",
     roomId,
     pcConnected: Boolean(room.pc),
-    phoneConnected: Boolean(room.phone),
+    players: getRoomPlayers(room),
   };
 
-  safeSend(room.pc, statusPayload);
-  safeSend(room.phone, statusPayload);
+  safeSend(room.pc, payload);
+  for (const ws of room.phones) safeSend(ws, payload);
 }
 
 function cleanupRoom(roomId) {
   const room = rooms.get(roomId);
   if (!room) return;
-
-  if (!room.pc && !room.phone) {
-    rooms.delete(roomId);
-  }
+  const hasClients = room.pc || room.phones.some(Boolean);
+  if (!hasClients) rooms.delete(roomId);
 }
 
 wss.on("connection", (ws) => {
   ws.role = null;
   ws.roomId = null;
+  ws.playerSlot = -1;
 
   ws.on("message", (rawMessage) => {
     let data;
@@ -139,52 +145,53 @@ wss.on("connection", (ws) => {
       const room = rooms.get(roomId);
 
       if (role === "pc") {
-        if (room.pc && room.pc !== ws) {
-          safeSend(room.pc, { type: "info", message: "Another PC connected" });
-          room.pc.close();
-        }
+        if (room.pc && room.pc !== ws) room.pc.close();
         room.pc = ws;
+        ws.role = "pc";
+        ws.roomId = roomId;
+        safeSend(ws, { type: "joined", roomId, role: "pc" });
+        notifyRoom(roomId);
+        return;
       }
 
       if (role === "phone") {
-        if (room.phone && room.phone !== ws) {
-          safeSend(room.phone, { type: "info", message: "Another phone connected" });
-          room.phone.close();
+        const freeSlot = room.phones.findIndex((p) => p === null);
+        if (freeSlot === -1) {
+          safeSend(ws, { type: "error", message: "Sala llena (max 4 jugadores)" });
+          return;
         }
-        room.phone = ws;
+        room.phones[freeSlot] = ws;
+        ws.role = "phone";
+        ws.roomId = roomId;
+        ws.playerSlot = freeSlot;
+        safeSend(ws, { type: "joined", roomId, role: "phone", playerSlot: freeSlot });
+        notifyRoom(roomId);
+        return;
       }
-
-      ws.role = role;
-      ws.roomId = roomId;
-
-      safeSend(ws, { type: "joined", roomId, role });
-      notifyRoom(roomId);
-      return;
     }
 
-    if (data.type === "orientation") {
+    if (data.type === "input") {
       const roomId = ws.roomId;
       if (!roomId || ws.role !== "phone") return;
-
       const room = rooms.get(roomId);
       if (!room || !room.pc) return;
 
+      // Compatibility: old phone builds used btn1/btn2.
+      const btnA = Boolean(data.btnA ?? data.btn1);
+      const btnB = Boolean(data.btnB ?? data.btn2);
+
       safeSend(room.pc, {
-        type: "orientation",
-        alpha: Number(data.alpha || 0),
-        beta: Number(data.beta || 0),
-        gamma: Number(data.gamma || 0),
+        type: "input",
+        playerSlot: ws.playerSlot,
+        dx: Number(data.dx) || 0,
+        dy: Number(data.dy) || 0,
+        btnA,
+        btnB,
+        btnC: Boolean(data.btnC),
+        btnD: Boolean(data.btnD),
         ts: Date.now(),
       });
       return;
-    }
-
-    if (data.type === "reset-score") {
-      const roomId = ws.roomId;
-      if (!roomId || ws.role !== "pc") return;
-      const room = rooms.get(roomId);
-      if (!room || !room.phone) return;
-      safeSend(room.phone, { type: "reset-ack" });
     }
   });
 
@@ -194,12 +201,10 @@ wss.on("connection", (ws) => {
     const room = rooms.get(ws.roomId);
     if (!room) return;
 
-    if (room.pc === ws) {
-      room.pc = null;
-    }
+    if (room.pc === ws) room.pc = null;
 
-    if (room.phone === ws) {
-      room.phone = null;
+    if (ws.role === "phone" && ws.playerSlot >= 0) {
+      room.phones[ws.playerSlot] = null;
     }
 
     notifyRoom(ws.roomId);
@@ -211,7 +216,7 @@ setInterval(() => {
   const now = Date.now();
   for (const [roomId, room] of rooms.entries()) {
     const roomAge = now - room.createdAt;
-    const hasClients = room.pc || room.phone;
+    const hasClients = room.pc || room.phones.some(Boolean);
     if (!hasClients && roomAge > 1000 * 60 * 10) {
       rooms.delete(roomId);
     }
@@ -219,5 +224,5 @@ setInterval(() => {
 }, 1000 * 60);
 
 server.listen(PORT, () => {
-  console.log(`Beat Saber Web MVP running on http://localhost:${PORT}`);
+  console.log(`Scalextric Web running on http://localhost:${PORT}`);
 });
